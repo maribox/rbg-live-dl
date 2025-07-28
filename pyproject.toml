@@ -1,0 +1,21 @@
+[project]
+name = "rbg-live-dl"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "selenium>=4.34.2",
+    "yt-dlp>=2025.7.21",
+]
+
+[project.scripts]
+rbg-live-dl = "rbg_live_dl:main"
+load = "rbg_live_dl:load"
+
+dev = "rbg_live_dl:main"
+
+
+[build-system]
+requires = ["uv_build>=0.8.3,<0.9.0"]
+build-backend = "uv_build"
