@@ -1,32 +1,30 @@
 import os
 import json
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from yt_dlp import YoutubeDL  # type: ignore
 
+
 def load_credentials(filepath: str = "credentials.json") -> tuple[str, str]:
     with open(filepath, "r") as f:
         data = json.load(f)
     return data["username"], data["password"]
+
 
 def wait_for_element(driver, by, selector, timeout: int = 20):
     return WebDriverWait(driver, timeout).until(
         EC.presence_of_element_located((by, selector))
     )
 
+
 def sanitize_filename(name: str) -> str:
     cleaned = re.sub(r'[\\/*?:"<>|]', '_', name)
     return re.sub(r'\s+', ' ', cleaned).strip()
 
-def extract_year_or_fallback(relative_path: str) -> str:
-    m = re.search(r"/(20\d{2})(?:/|$)", relative_path)
-    if m:
-        return m.group(1)
-    return relative_path.lstrip("/")
 
 def automated_login(driver, username: str, password: str):
     driver.get("https://live.rbg.tum.de")
@@ -38,6 +36,27 @@ def automated_login(driver, username: str, password: str):
     wait_for_element(driver, By.CSS_SELECTOR, "#user-context a[href*='logout']")
     print("✅ Logged in successfully")
 
+
+def get_video_urls(driver, listing_page_url: str) -> list[str]:
+    """
+    Fetches all video-watch URLs from the listing page.
+    Looks for <a class="block mb-2" href="..."> under article.mb-8 elements.
+    """
+    driver.get(listing_page_url)
+    # wait for at least one video block to appear
+    wait_for_element(driver, By.CSS_SELECTOR, "article.mb-8 a.block.mb-2")
+    anchors = driver.find_elements(By.CSS_SELECTOR, "article.mb-8 a.block.mb-2")
+    urls: list[str] = []
+    for a in anchors:
+        href = a.get_attribute("href")
+        if not href:
+            continue
+        # make absolute if relative
+        full = urljoin("https://live.rbg.tum.de", href)
+        urls.append(full)
+    return urls
+
+
 def extract_video_info(driver, video_page_url: str) -> tuple[str, str, str]:
     driver.get(video_page_url)
 
@@ -46,19 +65,18 @@ def extract_video_info(driver, video_page_url: str) -> tuple[str, str, str]:
         By.CSS_SELECTOR,
         "#video-comb_html5_api > source:nth-child(1)"
     )
-    hls_url = source.get_attribute("src")
-    if not hls_url or not hls_url.strip():
+    hls_url = source.get_attribute("src") or ""
+    if not hls_url.strip():
         raise RuntimeError("HLS URL not found")
     hls_url = hls_url.strip()
 
-    # 2) Link element → full href → relative path → year or fallback
+    # 2) Link element → full href → relative path
     link = wait_for_element(driver,
         By.CSS_SELECTOR,
         ".sm\\:flex-row > div:nth-child(1) > a:nth-child(1)"
     )
     full_href = link.get_attribute("href") or ""
-    rel_path = urlparse(full_href).path
-    year_or_path = extract_year_or_fallback(rel_path)
+    rel_path = urlparse(full_href).path  # e.g. "/course/2021/S/ma0005"
 
     # 3) span.hover:text-1 inner text
     span = link.find_element(By.CSS_SELECTOR, "span.hover\\:text-1")
@@ -71,14 +89,15 @@ def extract_video_info(driver, video_page_url: str) -> tuple[str, str, str]:
     )
     h1_text = re.sub(r'\s+', ' ', h1.text or "").strip()
 
-    # Build folder (span + year_or_path) and file (h1)
-    folder_base = f"{span_text} - {year_or_path}"
+    # Build folder (span + rel_path) and file (h1)
+    folder_base = f"{span_text} - {rel_path}"
     safe_folder = sanitize_filename(folder_base)
-    safe_file   = sanitize_filename(h1_text)
+    safe_file = sanitize_filename(h1_text)
 
     print(f"📂 Folder: out/{safe_folder}")
     print(f"🎥 File: {safe_file}.mp4")
     return hls_url, safe_folder, safe_file
+
 
 def download_hls(hls_url: str, folder: str, file_name: str):
     out_dir = os.path.join("out", folder)
@@ -96,20 +115,29 @@ def download_hls(hls_url: str, folder: str, file_name: str):
 
     print(f"✅ Download complete: {out_path}")
 
+
 def main():
     username, password = load_credentials()
     driver = webdriver.Chrome()
-
     try:
         automated_login(driver, username, password)
-        hls_url, folder, file_name = extract_video_info(
-            driver,
-            "https://live.rbg.tum.de/w/ma0005/1461"
-        )
-        print(f"🔗 HLS URL: {hls_url}")
-        download_hls(hls_url, folder, file_name)
+
+        # 1) Get all video URLs from the course listing
+        listing_url = "https://live.rbg.tum.de/course/2021/S/ma0005"
+        video_urls = get_video_urls(driver, listing_url)
+        print("🔗 Found video URLs:")
+        for url in video_urls:
+            print("  ", url)
+
+        # 2) For each, extract info and download
+        for vid_url in video_urls:
+            print(f"\n▶ Processing {vid_url}")
+            hls_url, folder, file_name = extract_video_info(driver, vid_url)
+            download_hls(hls_url, folder, file_name)
+
     finally:
         driver.quit()
+
 
 if __name__ == "__main__":
     main()
