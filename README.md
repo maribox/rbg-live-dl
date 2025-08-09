@@ -3,3 +3,4 @@
 ```
 uv run dev
 ```
+3. It will download all your pinned courses
